@@ -772,7 +772,7 @@ model PromotionProduct {
 
 model Page {
   id             String        @id @default(cuid())
-  /// "home" is the homepage. Landing pages live at /p/<slug>, content pages at /<slug>.
+  /// "home" is the homepage. Landing and content pages both live at /<slug>.
   slug           String        @unique
   title          String
   kind           PageKind      @default(LANDING)

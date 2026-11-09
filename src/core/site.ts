@@ -65,8 +65,10 @@ export const siteConfigSchema = z
         defaultTitle: z.string().default("Diau: buy and sell almost anything"),
         defaultDescription: z.string().max(300).default(""),
         ogImageUrl: z.string().default(""),
+        /** Off: robots.txt disallows everything and pages send noindex (e.g. while setting up). */
+        allowIndexing: z.boolean().default(true),
       })
-      .default({ titleTemplate: "%s | Diau", defaultTitle: "Diau: buy and sell almost anything", defaultDescription: "", ogImageUrl: "" }),
+      .default({ titleTemplate: "%s | Diau", defaultTitle: "Diau: buy and sell almost anything", defaultDescription: "", ogImageUrl: "", allowIndexing: true }),
     analytics: z
       .object({
         googleAnalyticsId: z.string().max(40).default(""),

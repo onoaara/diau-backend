@@ -767,7 +767,7 @@ async function main() {
       returns: "30-day returns. Items must be in original condition. Return shipping is free for damaged or incorrect items.",
       payments: "Pay on delivery or by bank transfer. Card and wallet payments are coming soon.",
     },
-    seo: { titleTemplate: "%s | Diau", defaultTitle: "Diau: buy and sell almost anything", defaultDescription: "Shop electronics, fashion, home, beauty and more on Diau. Great prices, fast shipping and easy returns.", ogImageUrl: "" },
+    seo: { titleTemplate: "%s | Diau", defaultTitle: "Diau: buy and sell almost anything", defaultDescription: "Shop electronics, fashion, home, beauty and more on Diau. Great prices, fast shipping and easy returns.", ogImageUrl: "", allowIndexing: true },
     contact: { email: "support@diau.test", phone: "+1 (555) 010-2026", address: "100 Market St, Austin, TX 78701" },
     social: { facebook: "", instagram: "https://instagram.com/", x: "https://x.com/", tiktok: "", youtube: "" },
   });

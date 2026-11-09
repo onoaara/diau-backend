@@ -27,6 +27,7 @@ import { newsletterRoutes } from "./routes/newsletter";
 import { pageRoutes } from "./routes/pages";
 import { productDetailRoutes } from "./routes/product";
 import { productRoutes } from "./routes/products";
+import { sitemapRoutes } from "./routes/sitemap";
 import { searchRoutes } from "./routes/search";
 import { settingsRoutes } from "./routes/settings";
 import { shoppingRoutes } from "./routes/shopping";
@@ -109,6 +110,7 @@ export async function buildApp() {
   await app.register(searchRoutes);
   await app.register(pageRoutes);
   await app.register(productRoutes);
+  await app.register(sitemapRoutes);
   await app.register(newsletterRoutes);
   await app.register(catalogRoutes);
   await app.register(productDetailRoutes);
