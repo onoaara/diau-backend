@@ -5,6 +5,7 @@ export * from "./site";
 export * from "./sections";
 export * from "./auth";
 export * from "./money";
+export * from "./currency";
 export * from "./slug";
 export * from "./cache-tags";
 export * from "./href";

@@ -106,7 +106,7 @@ async function productRows(days: number, segment: Segment, productId?: string): 
       SELECT i."productId",
         sum(i.quantity) AS units,
         coalesce(sum(i.quantity) FILTER (WHERE o."userId" IS NOT NULL), 0) AS "memberUnits",
-        sum(i."totalCents") AS revenue,
+        sum(round(i."totalCents" / o."exchangeRate"))::bigint AS revenue,
         count(DISTINCT i."orderId") AS orders
       FROM "OrderItem" i JOIN "Order" o ON o.id = i."orderId"
       WHERE i."productId" IS NOT NULL AND o."placedAt" >= ${from} AND o.status::text IN ${COUNTED} ${orderSegment(segment)} ${oneItem}
@@ -199,7 +199,7 @@ export async function analyticsOverview({ days, segment, sort, q, page }: Analyt
       FROM "ProductEvent" WHERE "createdAt" >= ${from} ${eventSegment(segment)}
       GROUP BY 1, 2`,
     prisma.$queryRaw<SalesTotals[]>`
-      SELECT (o."placedAt" >= ${from}) AS current, coalesce(sum(i.quantity), 0) AS units, coalesce(sum(i."totalCents"), 0) AS revenue,
+      SELECT (o."placedAt" >= ${from}) AS current, coalesce(sum(i.quantity), 0) AS units, coalesce(sum(round(i."totalCents" / o."exchangeRate")), 0)::bigint AS revenue,
         count(DISTINCT o.id) AS orders, count(DISTINCT coalesce(o."userId", o.email)) AS buyers
       FROM "OrderItem" i JOIN "Order" o ON o.id = i."orderId"
       WHERE o."placedAt" >= ${prevFrom} AND o.status::text IN ${COUNTED} ${orderSegment(segment)}

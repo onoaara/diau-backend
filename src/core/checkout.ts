@@ -1,3 +1,4 @@
+import { roundToStep } from "./currency";
 import { applyBps, formatMoney } from "./money";
 
 /**
@@ -63,7 +64,10 @@ export function computeTotals(input: {
   tax: TaxRule;
   /** For messages, e.g. "Spend $150.00 or more". */
   money?: { currency: string; locale: string };
+  /** Smallest amount the currency can express (core/currency.ts centsStep); percent results round to it. */
+  step?: number;
 }): Totals {
+  const step = input.step ?? 1;
   const subtotal = input.lines.reduce((sum, l) => sum + lineTotal(l), 0);
   let discount = 0;
   let shipping = input.shippingCents ?? 0;
@@ -79,7 +83,7 @@ export function computeTotals(input: {
     } else if (c.type !== "FREE_SHIPPING" && eligible === 0) {
       couponState = { code: c.code, applied: false, message: `${c.code} doesn't apply to the items in your cart.` };
     } else {
-      if (c.type === "PERCENT") discount = applyBps(eligible, c.value);
+      if (c.type === "PERCENT") discount = roundToStep(applyBps(eligible, c.value), step);
       else if (c.type === "FIXED") discount = Math.min(c.value, eligible);
       else shipping = 0;
       couponState = { code: c.code, applied: true, message: null };
@@ -88,7 +92,7 @@ export function computeTotals(input: {
 
   discount = Math.min(discount, subtotal);
   const taxable = subtotal - discount + (input.tax?.includeShipping ? shipping : 0);
-  const tax = input.tax ? applyBps(taxable, input.tax.rateBps) : 0;
+  const tax = input.tax ? roundToStep(applyBps(taxable, input.tax.rateBps), step) : 0;
   return {
     subtotalCents: subtotal,
     discountCents: discount,

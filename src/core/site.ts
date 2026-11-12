@@ -25,6 +25,21 @@ export const siteConfigSchema = z
     tagline: z.string().max(120).default("Buy and sell almost anything."),
     locale: z.string().default("en-US"),
     currency: z.string().length(3).default("USD"),
+    /**
+     * Extra currencies shoppers can pick (the base currency is always offered).
+     * rate = units of that currency per 1 unit of the base, kept by the admin.
+     * Cart, checkout and orders are charged in the shopper's pick at this rate.
+     */
+    currencies: z
+      .array(
+        z.object({
+          code: z.string().regex(/^[A-Z]{3}$/, "Use a three-letter code, e.g. GBP."),
+          rate: z.number().positive("Enter a rate above 0.").max(1_000_000),
+        }),
+      )
+      .max(20)
+      .default([])
+      .refine((list) => new Set(list.map((c) => c.code)).size === list.length, "Each currency can be listed once."),
     contact: z
       .object({
         email: z.union([z.email(), z.literal("")]).default("support@diau.test"),

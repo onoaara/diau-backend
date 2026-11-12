@@ -114,6 +114,8 @@ export async function readOrderForAdmin(id: string) {
     nextStatuses: ORDER_STATUSES.filter((s) => canTransition(o.status, s)),
     email: o.email,
     currency: o.currency,
+    /** Units of `currency` per 1 unit of the base currency at order time. */
+    exchangeRate: Number(o.exchangeRate),
     subtotalCents: o.subtotalCents,
     discountCents: o.discountCents,
     shippingCents: o.shippingCents,

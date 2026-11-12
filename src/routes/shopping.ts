@@ -30,14 +30,18 @@ const idParam = z.object({ id: z.string().regex(/^[a-z0-9]{10,40}$/i) });
 
 /** Signed-in users own their cart; guests send the cart token the frontend keeps in an httpOnly cookie. */
 async function cartOwner(req: FastifyRequest): Promise<CartOwner> {
-  if (req.auth) return { userId: (await loadAuthUser(req)).id, token: null };
+  const raw = req.headers["x-currency"];
+  const currency = typeof raw === "string" && /^[A-Za-z]{3}$/.test(raw) ? raw.toUpperCase() : null;
+  if (req.auth) return { userId: (await loadAuthUser(req)).id, token: null, currency };
   const token = req.headers["x-cart-token"];
-  return { userId: null, token: typeof token === "string" && /^[A-Za-z0-9_-]{40,60}$/.test(token) ? token : null };
+  return { userId: null, token: typeof token === "string" && /^[A-Za-z0-9_-]{40,60}$/.test(token) ? token : null, currency };
 }
 
 const publicLine = ({ categoryId: _c, savedForLater: _s, ...rest }: CartLine) => rest;
 
 const quoteDto = z.object({
+  currency: z.string(),
+  exchangeRate: z.number(),
   lines: z.array(cartLineDto),
   unavailable: z.array(cartLineDto),
   rates: z.array(z.object({ id: z.string(), name: z.string(), priceCents: z.number().int(), etaMinDays: z.number().int(), etaMaxDays: z.number().int() })),

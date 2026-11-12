@@ -223,7 +223,10 @@ export async function listAudit(q: { q?: string; entity?: string; actorId?: stri
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
-/** Sales KPIs for the last `days` days vs the period before, a daily revenue series, and work queues. */
+/**
+ * Sales KPIs for the last `days` days vs the period before, a daily revenue series, and work queues.
+ * Money is in the store's base currency: orders charged in another currency convert back at their rate.
+ */
 export async function dashboardStats(days: number) {
   const now = new Date();
   const dayMs = 86_400_000;
@@ -234,17 +237,17 @@ export async function dashboardStats(days: number) {
 
   const [series, prev, topProducts, lowStock, recent, pendingReviews, toShip, unpaid] = await Promise.all([
     prisma.$queryRaw<Array<{ day: Date; revenue: bigint; orders: bigint }>>`
-      SELECT date_trunc('day', "placedAt" AT TIME ZONE 'UTC') AS day, coalesce(sum("totalCents"), 0) AS revenue, count(*) AS orders
+      SELECT date_trunc('day', "placedAt" AT TIME ZONE 'UTC') AS day, coalesce(sum(round("totalCents" / "exchangeRate")), 0)::bigint AS revenue, count(*) AS orders
       FROM "Order" WHERE "placedAt" >= ${from} AND status::text IN ('PENDING','CONFIRMED','PROCESSING','SHIPPED','DELIVERED')
       GROUP BY 1 ORDER BY 1`,
-    prisma.order.aggregate({ where: { placedAt: { gte: prevFrom, lt: from }, status: { in: [...counted] } }, _sum: { totalCents: true }, _count: true }),
-    prisma.orderItem.groupBy({
-      by: ["productId", "title"],
-      where: { productId: { not: null }, order: { placedAt: { gte: from }, status: { in: [...counted] } } },
-      _sum: { quantity: true, totalCents: true },
-      orderBy: { _sum: { totalCents: "desc" } },
-      take: 5,
-    }),
+    prisma.$queryRaw<Array<{ revenue: bigint; orders: bigint }>>`
+      SELECT coalesce(sum(round("totalCents" / "exchangeRate")), 0)::bigint AS revenue, count(*) AS orders
+      FROM "Order" WHERE "placedAt" >= ${prevFrom} AND "placedAt" < ${from} AND status::text IN ('PENDING','CONFIRMED','PROCESSING','SHIPPED','DELIVERED')`,
+    prisma.$queryRaw<Array<{ productId: string; title: string; quantity: bigint; revenue: bigint }>>`
+      SELECT i."productId", i.title, sum(i.quantity)::bigint AS quantity, sum(round(i."totalCents" / o."exchangeRate"))::bigint AS revenue
+      FROM "OrderItem" i JOIN "Order" o ON o.id = i."orderId"
+      WHERE i."productId" IS NOT NULL AND o."placedAt" >= ${from} AND o.status::text IN ('PENDING','CONFIRMED','PROCESSING','SHIPPED','DELIVERED')
+      GROUP BY 1, 2 ORDER BY 4 DESC LIMIT 5`,
     prisma.$queryRaw<Array<{ id: string; title: string; stock: bigint; threshold: number }>>`
       SELECT p.id, p.title, coalesce(v.stock, p.stock) AS stock, p."lowStockThreshold" AS threshold
       FROM "Product" p
@@ -265,15 +268,15 @@ export async function dashboardStats(days: number) {
   });
   const revenue = points.reduce((s, p) => s + p.revenueCents, 0);
   const orders = points.reduce((s, p) => s + p.orders, 0);
-  const prevRevenue = prev._sum.totalCents ?? 0;
-  const prevOrders = prev._count;
+  const prevRevenue = Number(prev[0]?.revenue ?? 0);
+  const prevOrders = Number(prev[0]?.orders ?? 0);
   return {
     days,
     revenue: { cents: revenue, previousCents: prevRevenue },
     orders: { count: orders, previous: prevOrders },
     averageOrder: { cents: orders ? Math.round(revenue / orders) : 0, previousCents: prevOrders ? Math.round(prevRevenue / prevOrders) : 0 },
     series: points,
-    topProducts: topProducts.map((t) => ({ productId: t.productId!, title: t.title, quantity: t._sum.quantity ?? 0, revenueCents: t._sum.totalCents ?? 0 })),
+    topProducts: topProducts.map((t) => ({ productId: t.productId, title: t.title, quantity: Number(t.quantity), revenueCents: Number(t.revenue) })),
     lowStock: lowStock.map((l) => ({ id: l.id, title: l.title, stock: Number(l.stock), threshold: l.threshold })),
     recentOrders: recent.map((o) => ({ id: o.id, number: formatOrderNumber(o.orderNo), status: o.status, totalCents: o.totalCents, currency: o.currency, placedAt: o.placedAt.toISOString(), customer: (o.shippingAddress as { fullName?: string } | null)?.fullName ?? o.email })),
     queues: { pendingReviews, toShip, unpaid },

@@ -1,11 +1,16 @@
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import {
+  centsStep,
   computeTotals,
+  convertCents,
+  convertNullable,
   effectivePrice,
+  resolveCurrency,
   rateAvailable,
   shippingFor,
   type CouponRule,
+  type CurrencyContext,
   type PromotionDiscount,
   type TotalsLine,
 } from "../core";
@@ -19,7 +24,12 @@ import { liveProductWhere } from "./product-feed";
  * the frontend keeps in an httpOnly cookie. Only a SHA-256 of the token is stored,
  * so a database leak doesn't expose guest carts.
  */
-export type CartOwner = { userId: string | null; token: string | null };
+export type CartOwner = {
+  userId: string | null;
+  token: string | null;
+  /** The shopper's chosen currency (x-currency header); cart and checkout are priced in it. */
+  currency?: string | null;
+};
 
 export const MAX_LINE_QUANTITY = 10;
 
@@ -61,6 +71,8 @@ export const cartLineDto = z.object({
 export type CartLine = z.infer<typeof cartLineDto> & { categoryId: string; savedForLater: boolean };
 
 export const cartDto = z.object({
+  /** The currency every amount in this cart is in (the shopper's choice, else the store's). */
+  currency: z.string(),
   lines: z.array(cartLineDto),
   saved: z.array(cartLineDto),
   itemCount: z.number().int(),
@@ -166,6 +178,33 @@ export async function loadLines(cartId: string, now = new Date()): Promise<CartL
   return lines;
 }
 
+// ── Shopper currency ─────────────────────────────────────────────────────────
+
+/** Prices a line in the shopper's currency (per unit, so line totals stay exact multiples). */
+export const convertLine = (l: CartLine, ctx: CurrencyContext): CartLine => ({
+  ...l,
+  unitPriceCents: convertCents(l.unitPriceCents, ctx),
+  compareAtPriceCents: convertNullable(l.compareAtPriceCents, ctx),
+});
+
+/** Fixed coupon amounts and minimum spends are entered in the base currency. */
+export const convertCoupon = (rule: CouponRule | null, ctx: CurrencyContext): CouponRule | null =>
+  rule && { ...rule, value: rule.type === "FIXED" ? convertCents(rule.value, ctx) : rule.value, minSubtotalCents: convertNullable(rule.minSubtotalCents, ctx) };
+
+/** Shipping prices and thresholds are entered in the base currency. */
+export const convertRate = <R extends { priceCents: number; freeOverCents: number | null; minSubtotalCents: number | null }>(r: R, ctx: CurrencyContext): R => ({
+  ...r,
+  priceCents: convertCents(r.priceCents, ctx),
+  freeOverCents: convertNullable(r.freeOverCents, ctx),
+  minSubtotalCents: convertNullable(r.minSubtotalCents, ctx),
+});
+
+/** The shopper's currency context for this owner. */
+export async function currencyFor(owner: CartOwner) {
+  const site = await readSite();
+  return { site, ctx: resolveCurrency(site, owner.currency) };
+}
+
 export const toTotalsLines = (lines: CartLine[]): TotalsLine[] =>
   lines.map((l) => ({ productId: l.productId, categoryId: l.categoryId, unitPriceCents: l.unitPriceCents, quantity: l.quantity, freeShipping: l.freeShipping }));
 
@@ -190,17 +229,16 @@ export async function loadCoupon(code: string, now = new Date(), email?: string 
 const publicLine = ({ categoryId: _categoryId, savedForLater: _saved, ...rest }: CartLine) => rest;
 
 export async function readCart(owner: CartOwner) {
-  const empty = { lines: [], saved: [], itemCount: 0, coupon: null, totals: { subtotalCents: 0, discountCents: 0, shippingCents: null, totalCents: 0 }, shippingEstimate: null };
-  const cart = await findCart(owner);
+  const [{ site, ctx }, cart] = await Promise.all([currencyFor(owner), findCart(owner)]);
+  const empty = { currency: ctx.code, lines: [], saved: [], itemCount: 0, coupon: null, totals: { subtotalCents: 0, discountCents: 0, shippingCents: null, totalCents: 0 }, shippingEstimate: null };
   if (!cart) return empty;
   const now = new Date();
-  const all = await loadLines(cart.id, now);
+  const all = (await loadLines(cart.id, now)).map((l) => convertLine(l, ctx));
   const saved = all.filter((l) => l.savedForLater);
   const lines = all.filter((l) => !l.savedForLater);
   const buyable = lines.filter((l) => l.available);
 
-  const [site, coupon, zone] = await Promise.all([
-    readSite(),
+  const [coupon, zone] = await Promise.all([
     cart.couponCode ? loadCoupon(cart.couponCode, now) : Promise.resolve(null),
     prisma.shippingZone.findFirst({
       orderBy: { position: "asc" },
@@ -208,12 +246,20 @@ export async function readCart(owner: CartOwner) {
     }),
   ]);
   const subtotal = buyable.reduce((s, l) => s + l.unitPriceCents * l.quantity, 0);
-  const rate = zone?.rates.find((r) => rateAvailable(r, subtotal));
+  const rate = zone?.rates.map((r) => convertRate(r, ctx)).find((r) => rateAvailable(r, subtotal));
   const tl = toTotalsLines(buyable);
   const shipping = rate ? shippingFor(rate, tl, subtotal, true) : null;
-  const totals = computeTotals({ lines: tl, coupon: coupon?.rule ?? null, shippingCents: shipping, tax: null, money: site });
+  const totals = computeTotals({
+    lines: tl,
+    coupon: convertCoupon(coupon?.rule ?? null, ctx),
+    shippingCents: shipping,
+    tax: null,
+    money: { currency: ctx.code, locale: site.locale },
+    step: centsStep(ctx.code),
+  });
 
   return {
+    currency: ctx.code,
     lines: lines.map(publicLine),
     saved: saved.map(publicLine),
     itemCount: lines.reduce((s, l) => s + l.quantity, 0),

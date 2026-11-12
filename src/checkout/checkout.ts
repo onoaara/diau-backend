@@ -1,12 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
-import { computeTotals, formatOrderNumber, rateAvailable, shippingFor, type Totals } from "../core";
+import { centsStep, computeTotals, formatOrderNumber, rateAvailable, shippingFor, type Totals } from "../core";
 import { Prisma } from "../generated/prisma/client";
 import { prisma } from "../db";
 import { HttpError } from "../lib/errors";
 import { paymentMethods, providerFor } from "../payments";
 import { readSite } from "../routes/settings";
-import { findCart, loadCoupon, loadLines, toTotalsLines, type CartLine, type CartOwner } from "../catalog/cart";
+import { convertCoupon, convertLine, convertRate, currencyFor, findCart, loadCoupon, loadLines, toTotalsLines, type CartLine, type CartOwner } from "../catalog/cart";
 
 // ── Inputs ───────────────────────────────────────────────────────────────────
 
@@ -39,6 +39,8 @@ export const placeOrderSchema = z.object({
   paymentMethod: z.string().regex(/^[a-z0-9_]{2,30}$/),
   /** The total the shopper saw; if prices moved since, placement stops and re-quotes. */
   expectedTotalCents: z.number().int().min(0),
+  /** The currency of expectedTotalCents; placement re-quotes if the shopper's currency changed. */
+  expectedCurrency: z.string().regex(/^[A-Z]{3}$/).optional(),
   saveAddress: z.boolean().optional().default(false),
   notes: z.string().max(500).optional(),
 });
@@ -67,6 +69,10 @@ async function taxFor(country: string, region: string) {
 // ── Quote ────────────────────────────────────────────────────────────────────
 
 export type Quote = {
+  /** The currency every amount is in (the shopper's choice, else the store's). */
+  currency: string;
+  /** Units of `currency` per 1 unit of the base currency. */
+  exchangeRate: number;
   lines: CartLine[];
   unavailable: CartLine[];
   rates: Array<{ id: string; name: string; priceCents: number; etaMinDays: number; etaMaxDays: number }>;
@@ -79,31 +85,39 @@ export type Quote = {
 
 /** Everything checkout needs for an address and (optional) shipping choice. */
 export async function quote(owner: CartOwner, input: z.infer<typeof quoteInputSchema>): Promise<Quote> {
-  const cart = await findCart(owner);
-  const all = cart ? await loadLines(cart.id) : [];
+  const [{ site, ctx }, cart] = await Promise.all([currencyFor(owner), findCart(owner)]);
+  const all = cart ? (await loadLines(cart.id)).map((l) => convertLine(l, ctx)) : [];
   const active = all.filter((l) => !l.savedForLater);
   const lines = active.filter((l) => l.available);
   const unavailable = active.filter((l) => !l.available);
   const tl = toTotalsLines(lines);
   const subtotal = tl.reduce((s, l) => s + l.unitPriceCents * l.quantity, 0);
 
-  const [site, zone, tax, coupon] = await Promise.all([
-    readSite(),
+  const [zone, tax, coupon] = await Promise.all([
     zoneFor(input.country),
     taxFor(input.country, input.region),
     cart?.couponCode ? loadCoupon(cart.couponCode, new Date(), input.email) : Promise.resolve(null),
   ]);
-  const offered = (zone?.rates ?? []).filter((r) => rateAvailable(r, subtotal));
+  const offered = (zone?.rates ?? []).map((r) => convertRate(r, ctx)).filter((r) => rateAvailable(r, subtotal));
   const cheapest = offered.reduce<(typeof offered)[number] | null>((a, b) => (!a || b.priceCents < a.priceCents ? b : a), null);
   // Item-level free shipping is a home-market promise; abroad, items pay the rate.
   const shippable = zone?.isHome ? tl : tl.map((l) => ({ ...l, freeShipping: false }));
   const rates = offered.map((r) => ({ id: r.id, name: r.name, priceCents: shippingFor(r, shippable, subtotal, r.id === cheapest?.id), etaMinDays: r.etaMinDays, etaMaxDays: r.etaMaxDays }));
   const chosen = rates.find((r) => r.id === input.rateId) ?? rates[0] ?? null;
 
-  const totals = computeTotals({ lines: tl, coupon: coupon?.rule ?? null, shippingCents: chosen?.priceCents ?? null, tax, money: site });
+  const totals = computeTotals({
+    lines: tl,
+    coupon: convertCoupon(coupon?.rule ?? null, ctx),
+    shippingCents: chosen?.priceCents ?? null,
+    tax,
+    money: { currency: ctx.code, locale: site.locale },
+    step: centsStep(ctx.code),
+  });
   if (cart?.couponCode && coupon?.error) totals.coupon = { code: cart.couponCode, applied: false, message: coupon.error };
 
   return {
+    currency: ctx.code,
+    exchangeRate: ctx.rate,
     lines,
     unavailable,
     rates,
@@ -142,7 +156,7 @@ export async function placeOrder(owner: CartOwner, input: z.infer<typeof placeOr
   const provider = providerFor(input.paymentMethod, site);
   if (!provider) throw new HttpError(400, "invalid_payment", "Choose a payment method.", { paymentMethod: ["Choose a payment method."] });
   if (q.totals.coupon && !q.totals.coupon.applied) throw new HttpError(409, "coupon_invalid", q.totals.coupon.message ?? "Your promo code no longer applies.");
-  if (q.totals.totalCents !== input.expectedTotalCents) {
+  if (q.totals.totalCents !== input.expectedTotalCents || (input.expectedCurrency && input.expectedCurrency !== q.currency)) {
     throw new HttpError(409, "total_changed", "Prices or availability changed while you were checking out. Review the updated total, then place your order.");
   }
 
@@ -174,7 +188,8 @@ export async function placeOrder(owner: CartOwner, input: z.infer<typeof placeOr
         userId: owner.userId,
         email: input.email.trim().toLowerCase(),
         status: "PENDING",
-        currency: site.currency,
+        currency: q.currency,
+        exchangeRate: new Prisma.Decimal(q.exchangeRate),
         subtotalCents: q.totals.subtotalCents,
         discountCents: q.totals.discountCents,
         shippingCents: q.totals.shippingCents,
@@ -203,9 +218,9 @@ export async function placeOrder(owner: CartOwner, input: z.infer<typeof placeOr
       },
       select: { id: true, orderNo: true },
     });
-    const payment = await provider.initiate({ site, methodId: input.paymentMethod, amountCents: q.totals.totalCents, orderNumber: formatOrderNumber(created.orderNo) });
+    const payment = await provider.initiate({ site, methodId: input.paymentMethod, amountCents: q.totals.totalCents, currency: q.currency, orderNumber: formatOrderNumber(created.orderNo) });
     await tx.payment.create({
-      data: { orderId: created.id, provider: payment.provider, method: payment.method, status: payment.status, amountCents: q.totals.totalCents, currency: site.currency },
+      data: { orderId: created.id, provider: payment.provider, method: payment.method, status: payment.status, amountCents: q.totals.totalCents, currency: q.currency },
     });
     if (cart) {
       await tx.cartItem.deleteMany({ where: { cartId: cart.id, savedForLater: false } });

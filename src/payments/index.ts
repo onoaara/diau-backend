@@ -20,7 +20,7 @@ export type InitiatedPayment = {
 export interface PaymentProvider {
   id: string;
   methods(site: SiteConfig): PaymentMethodOption[];
-  initiate(input: { site: SiteConfig; methodId: string; amountCents: number; orderNumber: string }): Promise<InitiatedPayment>;
+  initiate(input: { site: SiteConfig; methodId: string; amountCents: number; currency: string; orderNumber: string }): Promise<InitiatedPayment>;
 }
 
 export const manualProvider: PaymentProvider = {

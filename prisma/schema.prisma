@@ -624,7 +624,11 @@ model Order {
   userId            String?
   email             String
   status            OrderStatus   @default(PENDING)
+  /// The currency the shopper was charged in (amounts below are in it).
   currency          String        @default("USD") @db.Char(3)
+  /// Units of `currency` per 1 unit of the store's base currency at order time
+  /// (1 when charged in the base). Reports convert back: cents / exchangeRate.
+  exchangeRate      Decimal       @default(1) @db.Decimal(18, 8)
   subtotalCents     Int
   discountCents     Int           @default(0)
   shippingCents     Int           @default(0)

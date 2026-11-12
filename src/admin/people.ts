@@ -27,7 +27,7 @@ export async function listCustomers(q: z.infer<typeof customerListQuery>) {
     prisma.$queryRaw<Array<{ id: string; name: string | null; email: string; isActive: boolean; createdAt: Date; order_count: bigint; spent: bigint; last_order: Date | null }>>`
       SELECT u.id, u.name, u.email, u."isActive", u."createdAt",
              count(o.id) FILTER (WHERE o.status IN (${counted})) AS order_count,
-             coalesce(sum(o."totalCents") FILTER (WHERE o.status IN (${counted})), 0) AS spent,
+             coalesce(sum(round(o."totalCents" / o."exchangeRate")) FILTER (WHERE o.status IN (${counted})), 0)::bigint AS spent,
              max(o."placedAt") AS last_order
       FROM "User" u LEFT JOIN "Order" o ON o."userId" = u.id
       WHERE ${whereSql}
@@ -56,14 +56,15 @@ export async function readCustomer(id: string) {
       createdAt: true,
       lastLoginAt: true,
       addresses: { orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }] },
-      orders: { orderBy: { placedAt: "desc" }, take: 50, select: { id: true, orderNo: true, status: true, totalCents: true, currency: true, placedAt: true, _count: { select: { items: true } } } },
+      orders: { orderBy: { placedAt: "desc" }, take: 50, select: { id: true, orderNo: true, status: true, totalCents: true, currency: true, exchangeRate: true, placedAt: true, _count: { select: { items: true } } } },
       reviews: { orderBy: { createdAt: "desc" }, take: 20, select: { id: true, rating: true, title: true, status: true, createdAt: true, product: { select: { title: true, slug: true } } } },
       _count: { select: { watchlist: true } },
     },
   });
   if (!u) return null;
   const counted = u.orders.filter((o) => (COUNTED as readonly string[]).includes(o.status));
-  const spent = counted.reduce((s, o) => s + o.totalCents, 0);
+  // Lifetime spend in the base currency (orders charged in another currency convert back).
+  const spent = counted.reduce((s, o) => s + Math.round(o.totalCents / Number(o.exchangeRate)), 0);
   return {
     id: u.id,
     name: u.name,
