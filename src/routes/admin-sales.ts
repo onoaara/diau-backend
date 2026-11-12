@@ -1,6 +1,7 @@
 import type { FastifyRequest } from "fastify";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
+import { analyticsOverview, analyticsQuery, productAnalytics } from "../admin/analytics";
 import {
   auditListQuery,
   contentPageInputSchema,
@@ -48,6 +49,17 @@ const who = (req: FastifyRequest) => ({ actorId: req.authUser?.id ?? null, ip: r
 
 /** Admin: orders, payments & refunds, customers, team, promotions, coupons, reviews, content pages, audit log, dashboard. */
 export const adminSalesRoutes: FastifyPluginAsyncZod = async (app) => {
+  // ── Analytics ──────────────────────────────────────────────────────────────
+  app.get("/admin/analytics", { preHandler: requirePermission("dashboard:read"), schema: { tags: ["admin"], querystring: analyticsQuery } }, async (req) => analyticsOverview(req.query));
+  app.get(
+    "/admin/analytics/products/:id",
+    {
+      preHandler: requirePermission("dashboard:read"),
+      schema: { tags: ["admin"], params: z.object({ id: z.string().regex(/^[a-z0-9]{10,40}$/i) }), querystring: z.object({ days: analyticsQuery.shape.days }) },
+    },
+    async (req) => productAnalytics(req.params.id, req.query.days),
+  );
+
   // ── Dashboard ──────────────────────────────────────────────────────────────
   app.get("/admin/dashboard", { preHandler: requirePermission("dashboard:read"), schema: { tags: ["admin"], querystring: z.object({ days: z.coerce.number().int().refine((d) => [7, 30, 90].includes(d)).default(30) }) } }, async (req) =>
     dashboardStats(req.query.days),

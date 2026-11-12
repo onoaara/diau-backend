@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { liveProductSlugs, productDetailDto, readProductDetail, reviewPage, reviewPageDto } from "../catalog/product-detail";
+import { actorFrom, recordEvents, recordView } from "../analytics/events";
 import { liveProductWhere } from "../catalog/product-feed";
 import { createReview, reviewEligibility, reviewInputSchema } from "../catalog/reviews";
 import { TAGS } from "../core";
@@ -108,12 +109,36 @@ export const productDetailRoutes: FastifyPluginAsyncZod = async (app) => {
       const user = await loadAuthUser(req);
       const exists = await prisma.product.findFirst({ where: { ...liveProductWhere(new Date()), id: req.params.productId }, select: { id: true } });
       if (!exists) throw notFound("Product");
-      await prisma.watchlistItem.upsert({
-        where: { userId_productId: { userId: user.id, productId: req.params.productId } },
-        create: { userId: user.id, productId: req.params.productId },
-        update: {},
-      });
+      // createMany + skipDuplicates tells a new watch (count 1) from a repeat.
+      const { count } = await prisma.watchlistItem.createMany({ data: [{ userId: user.id, productId: req.params.productId }], skipDuplicates: true });
+      if (count) void recordEvents(actorFrom(req), [{ type: "WATCH", productId: req.params.productId }], req.log);
       return reply.code(204).send(null);
+    },
+  );
+
+  // ── Analytics events from the browser ──────────────────────────────────────
+  // Views and shares happen client-side (product pages are cached, so the
+  // server never sees them). Guests who press Watch are sent to sign in; that
+  // intent is recorded here too (members' watches are recorded by PUT above).
+  app.post(
+    "/events",
+    {
+      config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+      schema: {
+        tags: ["analytics"],
+        body: z.object({ type: z.enum(["VIEW", "SHARE", "WATCH"]), productId: productIdParam.shape.productId }),
+        response: { 202: z.object({ recorded: z.boolean() }) },
+      },
+    },
+    async (req, reply) => {
+      const actor = actorFrom(req);
+      const { type, productId } = req.body;
+      if (actor.staff || (type === "WATCH" && actor.userId)) return reply.code(202).send({ recorded: false });
+      const live = await prisma.product.findFirst({ where: { ...liveProductWhere(new Date()), id: productId }, select: { id: true } });
+      if (!live) return reply.code(202).send({ recorded: false });
+      if (type === "VIEW") return reply.code(202).send({ recorded: await recordView(actor, productId, req.log) });
+      await recordEvents(actor, [{ type, productId }], req.log);
+      return reply.code(202).send({ recorded: true });
     },
   );
 

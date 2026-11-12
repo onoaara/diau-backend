@@ -24,6 +24,7 @@ import { hashPassword } from "../src/lib/password";
 import { isCloudinaryConfigured, uploadFromUrl } from "../src/lib/cloudinary";
 import type { Prisma } from "../src/generated/prisma/client";
 import { indexProductImages } from "../src/search/image-index";
+import { seedAnalytics } from "./seed-analytics";
 
 const prisma = createPrisma();
 const useCloudinary = isCloudinaryConfigured();
@@ -863,6 +864,7 @@ async function main() {
     reviews: await prisma.review.count(),
     media: await prisma.mediaAsset.count(),
     orders: await prisma.order.count(),
+    analyticsEvents: (await seedAnalytics(prisma)).events,
   };
   console.log("\n✔ Seed complete in", ((Date.now() - started) / 1000).toFixed(1) + "s", counts);
   console.log(`\n  Super admin: ${adminEmail} / ${adminPassword}`);

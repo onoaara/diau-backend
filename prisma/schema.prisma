@@ -160,6 +160,7 @@ model User {
   watchlist      WatchlistItem[]
   savedSearches  SavedSearch[]
   recentlyViewed RecentlyViewed[]
+  productEvents  ProductEvent[]
   auditLogs      AuditLog[]
   uploads        MediaAsset[]
 
@@ -375,6 +376,7 @@ model Product {
   watchers       WatchlistItem[]
   recentlyViewed RecentlyViewed[]
   promotions     PromotionProduct[]
+  events         ProductEvent[]
 
   @@index([status, categoryId])
   @@index([brandId])
@@ -995,4 +997,41 @@ model AuditLog {
   @@index([entity, entityId])
   @@index([createdAt])
   @@index([actorId])
+}
+
+// ───────────────────────────── Analytics ─────────────────────────────
+
+enum ProductEventType {
+  VIEW
+  ADD_TO_CART
+  WATCH
+  SHARE
+  PURCHASE
+}
+
+/// What shoppers do with products (Admin → Analytics). Views and shares come
+/// from the browser after the page loads (cached pages never reach the server);
+/// add-to-cart, watch and purchase are recorded by the API where they happen.
+/// Admin accounts are never recorded. Rows hold no personal data: guests are a
+/// random visitor id from a first-party cookie, members their user id.
+model ProductEvent {
+  id        BigInt           @id @default(autoincrement())
+  type      ProductEventType
+  productId String
+  /// Signed-in shopper; null = guest.
+  userId    String?
+  /// Random per-browser id (cookie). Counts unique visitors and links a guest's
+  /// view → cart → purchase. Null when the browser sent none.
+  visitorId String?          @db.VarChar(64)
+  /// Units for ADD_TO_CART and PURCHASE, otherwise 1.
+  quantity  Int              @default(1)
+  createdAt DateTime         @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt, type])
+  @@index([productId, type, createdAt])
+  /// View de-duplication: has this visitor seen this product in the last 30 minutes?
+  @@index([visitorId, productId, createdAt])
 }

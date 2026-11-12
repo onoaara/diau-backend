@@ -17,6 +17,7 @@ import {
   type CartLine,
   type CartOwner,
 } from "../catalog/cart";
+import { actorFrom, recordEvents } from "../analytics/events";
 import { productCardDto, productsByIds } from "../catalog/product-feed";
 import { addressSchema, placeOrderSchema, placeOrder, quote, quoteInputSchema } from "../checkout/checkout";
 import { claimGuestOrder, listOrders, orderDto, readOrder } from "../checkout/orders";
@@ -80,7 +81,11 @@ export const shoppingRoutes: FastifyPluginAsyncZod = async (app) => {
         response: { 201: z.object({ cartToken: z.string().nullable(), itemCount: z.number().int() }) },
       },
     },
-    async (req, reply) => reply.code(201).send(await addToCart(await cartOwner(req), req.body)),
+    async (req, reply) => {
+      const res = await addToCart(await cartOwner(req), req.body);
+      void recordEvents(actorFrom(req), [{ type: "ADD_TO_CART", productId: req.body.productId, quantity: req.body.quantity }], req.log);
+      return reply.code(201).send(res);
+    },
   );
 
   app.patch(
@@ -157,7 +162,15 @@ export const shoppingRoutes: FastifyPluginAsyncZod = async (app) => {
         response: { 201: z.object({ orderId: z.string(), orderNumber: z.string(), accessToken: z.string().nullable(), replay: z.boolean() }) },
       },
     },
-    async (req, reply) => reply.code(201).send(await placeOrder(await cartOwner(req), req.body)),
+    async (req, reply) => {
+      const placed = await placeOrder(await cartOwner(req), req.body);
+      // One PURCHASE per line, once (a retried "Place order" replays the same order).
+      if (!placed.replay) {
+        const lines = await prisma.orderItem.findMany({ where: { orderId: placed.orderId, productId: { not: null } }, select: { productId: true, quantity: true } });
+        void recordEvents(actorFrom(req), lines.map((l) => ({ type: "PURCHASE" as const, productId: l.productId!, quantity: l.quantity })), req.log);
+      }
+      return reply.code(201).send(placed);
+    },
   );
 
   // ── Orders ──────────────────────────────────────────────────────────────────
