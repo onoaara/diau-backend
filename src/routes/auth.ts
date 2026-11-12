@@ -85,7 +85,13 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
       const ok = user?.passwordHash
         ? await verifyPassword(password, user.passwordHash)
         : await burnPasswordCheck(password);
-      if (!user || !ok) throw unauthorized("That email and password don't match. Try again.");
+      // Says which field is wrong (the store owner asked for it). The password check still
+      // runs for unknown emails, so both answers take the same time; the 10-a-minute
+      // rate limit above keeps anyone from testing lots of emails.
+      if (!user?.passwordHash) {
+        throw new HttpError(401, "unknown_email", "There's no account with this email.", { email: ["There's no account with this email."] });
+      }
+      if (!ok) throw new HttpError(401, "wrong_password", "That password isn't right.", { password: ["That password isn't right. Try again."] });
       if (!user.isActive) {
         throw new HttpError(403, "account_disabled", "This account is disabled. Contact support.");
       }
