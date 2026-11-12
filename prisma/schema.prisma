@@ -148,10 +148,14 @@ model User {
   permissions   String[]  @default([])
   isActive      Boolean   @default(true)
   lastLoginAt   DateTime?
+  /// Notification settings: { off: string[] (types turned off), sound: boolean }. Null = defaults.
+  notificationPrefs Json?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   accounts       Account[]
+  notifications     Notification[]
+  pushSubscriptions PushSubscription[]
   sessions       Session[]
   addresses      Address[]
   orders         Order[]
@@ -551,6 +555,8 @@ model Cart {
   /// Guest carts are addressed by an opaque token stored in an httpOnly cookie.
   guestToken String?  @unique
   couponCode String?
+  /// Last "items left in your cart" reminder; cleared when the cart changes again.
+  remindedAt DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -567,6 +573,8 @@ model CartItem {
   variantId     String?
   quantity      Int      @default(1)
   savedForLater Boolean  @default(false)
+  /// The unit price the shopper last saw for this line (for "price dropped" notifications).
+  notifiedPriceCents Int?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -581,6 +589,9 @@ model WatchlistItem {
   id        String   @id @default(cuid())
   userId    String
   productId String
+  /// Price and stock the watcher was last told about (price drop / back in stock notifications).
+  notifiedPriceCents Int?
+  notifiedInStock    Boolean?
   createdAt DateTime @default(now())
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -753,6 +764,8 @@ model Promotion {
   startsAt     DateTime
   endsAt       DateTime
   isActive     Boolean       @default(true)
+  /// When "new deal" notifications went out for it (once per promotion).
+  announcedAt  DateTime?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
@@ -1038,4 +1051,39 @@ model ProductEvent {
   @@index([productId, type, createdAt])
   /// View de-duplication: has this visitor seen this product in the last 30 minutes?
   @@index([visitorId, productId, createdAt])
+}
+
+/// In-app notifications (DESIGN.md §5.22): one row per recipient, so read state is per person.
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  /// order_update · watchlist_deal · cart_reminder · new_deal · admin_order · admin_review · admin_low_stock · admin_customer
+  type      String
+  title     String
+  body      String
+  link      String?
+  imageUrl  String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+}
+
+/// A browser or phone that turned on push notifications (Web Push).
+model PushSubscription {
+  id         String    @id @default(cuid())
+  userId     String
+  endpoint   String    @unique
+  p256dh     String
+  auth       String
+  userAgent  String?
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

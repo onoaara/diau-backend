@@ -16,3 +16,4 @@ export * from "./checkout";
 export * from "./catalog-admin";
 export * from "./storefront-admin";
 export * from "./sales-admin";
+export * from "./notifications";

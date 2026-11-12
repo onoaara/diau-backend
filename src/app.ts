@@ -24,6 +24,7 @@ import { catalogRoutes } from "./routes/catalog";
 import { healthRoutes } from "./routes/health";
 import { navigationRoutes } from "./routes/navigation";
 import { newsletterRoutes } from "./routes/newsletter";
+import { notificationRoutes } from "./routes/notifications";
 import { pageRoutes } from "./routes/pages";
 import { productDetailRoutes } from "./routes/product";
 import { productRoutes } from "./routes/products";
@@ -118,6 +119,7 @@ export async function buildApp() {
   await app.register(adminCatalogRoutes);
   await app.register(adminStorefrontRoutes);
   await app.register(adminSalesRoutes);
+  await app.register(notificationRoutes);
 
   return app;
 }

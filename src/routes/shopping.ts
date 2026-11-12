@@ -25,6 +25,7 @@ import { prisma } from "../db";
 import { notFound } from "../lib/errors";
 import { loadAuthUser, requireAuth } from "../plugins/auth";
 import { issue, userSelect } from "./auth";
+import { onCartChanged, onCustomerRegistered, onOrderPlaced } from "../realtime/events";
 
 const idParam = z.object({ id: z.string().regex(/^[a-z0-9]{10,40}$/i) });
 
@@ -62,6 +63,11 @@ const quoteDto = z.object({
 const savedAddressDto = addressSchema.extend({ id: z.string(), isDefault: z.boolean() });
 
 export const shoppingRoutes: FastifyPluginAsyncZod = async (app) => {
+  // A signed-in shopper's cart changed: their other tabs and devices refresh it live (DESIGN.md §5.22).
+  app.addHook("onResponse", async (req, reply) => {
+    if (req.method !== "GET" && reply.statusCode < 400 && req.url.startsWith("/cart") && req.auth) onCartChanged(req.auth.userId);
+  });
+
   // ── Cart ────────────────────────────────────────────────────────────────────
   app.get("/cart", { schema: { tags: ["cart"], response: { 200: cartDto } } }, async (req) => readCart(await cartOwner(req)));
 
@@ -172,6 +178,7 @@ export const shoppingRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!placed.replay) {
         const lines = await prisma.orderItem.findMany({ where: { orderId: placed.orderId, productId: { not: null } }, select: { productId: true, quantity: true } });
         void recordEvents(actorFrom(req), lines.map((l) => ({ type: "PURCHASE" as const, productId: l.productId!, quantity: l.quantity })), req.log);
+        void onOrderPlaced(placed.orderId);
       }
       return reply.code(201).send(placed);
     },
@@ -209,6 +216,7 @@ export const shoppingRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (req, reply) => {
       const userId = await claimGuestOrder(req.params.id, req.body.key, req.body.password);
+      void onCustomerRegistered(userId);
       const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: userSelect });
       return reply.code(201).send(await issue(user));
     },

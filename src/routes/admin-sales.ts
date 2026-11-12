@@ -42,6 +42,7 @@ import { audit } from "../lib/audit";
 import { notFound } from "../lib/errors";
 import { revalidateFrontend } from "../lib/revalidate";
 import { requirePermission } from "../plugins/auth";
+import { onOrderStatusChanged, onPaymentReceived, onRefund, onTrackingAdded } from "../realtime/events";
 
 const idParam = z.object({ id: z.string().regex(/^[a-z0-9]{10,40}$/i) });
 const ok = z.object({ ok: z.literal(true) });
@@ -87,6 +88,7 @@ export const adminSalesRoutes: FastifyPluginAsyncZod = async (app) => {
     const r = await changeOrderStatus(req.params.id, req.body, req.authUser!.id);
     await audit({ ...who(req), action: "order.status", entity: "Order", entityId: req.params.id, summary: `${r.number}: ${r.from.toLowerCase()} → ${r.to.toLowerCase()}${r.restocked ? " (restocked)" : ""}`, before: { status: r.from }, after: { status: r.to } });
     if (r.restocked) revalidateFrontend([TAGS.products]);
+    void onOrderStatusChanged(req.params.id, r.to);
     return { ok: true as const };
   });
 
@@ -96,6 +98,7 @@ export const adminSalesRoutes: FastifyPluginAsyncZod = async (app) => {
     async (req) => {
       const r = await markPaymentPaid(req.params.id, req.params.paymentId, req.body.reference, req.authUser!.id);
       await audit({ ...who(req), action: "order.payment_received", entity: "Order", entityId: req.params.id, summary: `${r.number}: payment of ${(r.amountCents / 100).toFixed(2)} marked received` });
+      void onPaymentReceived(req.params.id);
       return { ok: true as const };
     },
   );
@@ -104,6 +107,7 @@ export const adminSalesRoutes: FastifyPluginAsyncZod = async (app) => {
     const r = await refundOrder(req.params.id, req.body, req.authUser!.id);
     await audit({ ...who(req), action: "order.refund", entity: "Order", entityId: req.params.id, summary: `${r.number}: refunded ${(r.amountCents / 100).toFixed(2)}${r.full ? " (full)" : ""}${r.restocked ? ", restocked" : ""}`, after: { amountCents: r.amountCents, reason: req.body.reason } });
     if (r.restocked) revalidateFrontend([TAGS.products]);
+    void onRefund(req.params.id, r.amountCents);
     return { ok: true as const };
   });
 
@@ -116,6 +120,7 @@ export const adminSalesRoutes: FastifyPluginAsyncZod = async (app) => {
   app.put("/admin/orders/:id/tracking", { preHandler: requirePermission("orders:write"), schema: { tags: ["admin"], params: idParam, body: trackingInputSchema, response: { 200: ok } } }, async (req) => {
     const r = await updateTracking(req.params.id, req.body, req.authUser!.id);
     await audit({ ...who(req), action: "order.tracking", entity: "Order", entityId: req.params.id, summary: `${r.number}: tracking updated`, after: req.body });
+    if (req.body.trackingNumber) void onTrackingAdded(req.params.id);
     return { ok: true as const };
   });
 

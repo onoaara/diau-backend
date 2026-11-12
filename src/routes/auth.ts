@@ -13,6 +13,7 @@ import { signAccessToken } from "../lib/jwt";
 import { burnPasswordCheck, hashPassword, verifyPassword } from "../lib/password";
 import { conflict, HttpError, unauthorized } from "../lib/errors";
 import { requireAuth } from "../plugins/auth";
+import { onCustomerRegistered } from "../realtime/events";
 
 export const userSelect = { id: true, email: true, name: true, image: true, role: true, permissions: true } as const;
 
@@ -64,6 +65,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
         data: { name, email, passwordHash: await hashPassword(password), lastLoginAt: new Date() },
         select: userSelect,
       });
+      void onCustomerRegistered(user.id);
       return reply.code(201).send(await issue(user));
     },
   );

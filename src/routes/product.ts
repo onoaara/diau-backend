@@ -9,6 +9,7 @@ import { prisma } from "../db";
 import { notFound } from "../lib/errors";
 import { revalidateFrontend } from "../lib/revalidate";
 import { loadAuthUser, requireAuth } from "../plugins/auth";
+import { onReviewCreated } from "../realtime/events";
 
 const slugParam = z.object({ slug: z.string().regex(/^[a-z0-9-]{1,120}$/) });
 const productIdParam = z.object({ productId: z.string().regex(/^[a-z0-9]{10,40}$/i) });
@@ -87,6 +88,7 @@ export const productDetailRoutes: FastifyPluginAsyncZod = async (app) => {
       const user = await loadAuthUser(req);
       const review = await createReview(user.id, await liveProductIdBySlug(req.params.slug), req.body);
       if (review.status === "APPROVED") revalidateFrontend([TAGS.product(req.params.slug), TAGS.products]);
+      void onReviewCreated(review.id);
       return reply.code(201).send(review);
     },
   );
