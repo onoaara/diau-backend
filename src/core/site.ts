@@ -72,8 +72,14 @@ export const siteConfigSchema = z
         x: optionalUrl,
         tiktok: optionalUrl,
         youtube: optionalUrl,
+        whatsapp: optionalUrl,
+        linkedin: optionalUrl,
+        pinterest: optionalUrl,
+        threads: optionalUrl,
+        snapchat: optionalUrl,
+        telegram: optionalUrl,
       })
-      .default({ facebook: "", instagram: "", x: "", tiktok: "", youtube: "" }),
+      .default({ facebook: "", instagram: "", x: "", tiktok: "", youtube: "", whatsapp: "", linkedin: "", pinterest: "", threads: "", snapchat: "", telegram: "" }),
     seo: z
       .object({
         titleTemplate: z.string().default("%s | Diau"),
