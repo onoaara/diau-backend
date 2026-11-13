@@ -64,10 +64,34 @@ export const loginSchema = z.object({
 });
 export type LoginInput = z.infer<typeof loginSchema>;
 
+/** Phone numbers: optional, digits with an optional leading + and spaces, dashes or brackets. */
+export const phoneSchema = z
+  .string()
+  .trim()
+  .max(24)
+  .regex(/^\+?[0-9][0-9 ()-]{5,22}[0-9]$/, "Enter a valid phone number, e.g. +234 801 234 5678")
+  .optional()
+  .or(z.literal(""));
+
 export const registerSchema = z.object({
-  name: z.string().trim().min(1, "Enter your name").max(80),
+  firstName: z.string().trim().min(1, "Enter your first name").max(40),
+  lastName: z.string().trim().min(1, "Enter your last name").max(40),
   email: z.email("Enter a valid email address").trim().toLowerCase(),
+  phone: phoneSchema,
   password,
+  acceptTerms: z.literal(true, { error: "Agree to the Terms and Privacy Policy to continue" }),
+  newsletter: z.boolean().default(false),
+});
+
+/** Google / Apple sign-in, sent by the web server (internal secret) after the provider vouches for the person. */
+export const oauthSignInSchema = z.object({
+  provider: z.enum(["google", "apple"]),
+  providerAccountId: z.string().min(1).max(255),
+  email: z.email().trim().toLowerCase(),
+  /** The provider confirmed they own this email (needed to link to an existing account). */
+  emailVerified: z.boolean(),
+  name: z.string().trim().max(80).nullable().optional(),
+  image: z.url().max(1000).nullable().optional(),
 });
 export type RegisterInput = z.infer<typeof registerSchema>;
 

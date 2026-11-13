@@ -4,14 +4,17 @@ import {
   authResponseSchema,
   effectivePermissions,
   loginSchema,
+  oauthSignInSchema,
   registerSchema,
   sessionUserSchema,
   type Role,
 } from "../core";
 import { prisma } from "../db";
+import { env } from "../env";
+import { isInternalRequest } from "../lib/client-ip";
 import { signAccessToken } from "../lib/jwt";
 import { burnPasswordCheck, hashPassword, verifyPassword } from "../lib/password";
-import { conflict, HttpError, unauthorized } from "../lib/errors";
+import { conflict, forbidden, HttpError, unauthorized } from "../lib/errors";
 import { requireAuth } from "../plugins/auth";
 import { onCustomerRegistered } from "../realtime/events";
 
@@ -54,19 +57,79 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: { tags: ["auth"], body: registerSchema, response: { 201: authResponseSchema } },
     },
     async (req, reply) => {
-      const { name, email, password } = req.body;
+      const { firstName, lastName, email, phone, password, newsletter } = req.body;
       const exists = await prisma.user.findUnique({ where: { email }, select: { id: true } });
       if (exists) {
         throw conflict("An account with this email already exists. Sign in instead.", {
-          email: ["Already registered"],
+          email: ["An account with this email already exists. Sign in instead."],
         });
       }
+      const now = new Date();
       const user = await prisma.user.create({
-        data: { name, email, passwordHash: await hashPassword(password), lastLoginAt: new Date() },
+        data: {
+          name: `${firstName} ${lastName}`,
+          email,
+          phone: phone || null,
+          termsAcceptedAt: now,
+          passwordHash: await hashPassword(password),
+          lastLoginAt: now,
+        },
         select: userSelect,
       });
+      // "Send me deals by email": join the newsletter list (already on it is fine).
+      if (newsletter) {
+        await prisma.newsletterSubscriber.upsert({ where: { email }, create: { email, source: "signup" }, update: {} }).catch(() => undefined);
+      }
       void onCustomerRegistered(user.id);
       return reply.code(201).send(await issue(user));
+    },
+  );
+
+  /**
+   * Google / Apple sign-in. Only the web server may call this (internal secret):
+   * Auth.js has already checked the provider's answer. Signs in the linked account;
+   * otherwise links an existing account with the same email (only when the provider
+   * verified that email), or creates a new account (no password) for them.
+   */
+  app.post(
+    "/auth/oauth",
+    {
+      config: authRateLimit,
+      schema: { tags: ["auth"], hide: true, body: oauthSignInSchema, response: { 200: authResponseSchema } },
+    },
+    async (req) => {
+      if (!isInternalRequest(req, env.INTERNAL_API_SECRET)) throw forbidden();
+      const { provider, providerAccountId, email, emailVerified, name, image } = req.body;
+      const now = new Date();
+
+      const linked = await prisma.account.findUnique({
+        where: { provider_providerAccountId: { provider, providerAccountId } },
+        select: { user: { select: { ...userSelect, isActive: true } } },
+      });
+      let user = linked?.user ?? null;
+      let created = false;
+
+      if (!user) {
+        const existing = await prisma.user.findUnique({ where: { email }, select: { ...userSelect, isActive: true } });
+        if (existing && !emailVerified) {
+          throw conflict("An account with this email already exists. Sign in with your password instead.");
+        }
+        if (existing) {
+          user = existing;
+        } else {
+          user = await prisma.user.create({
+            data: { email, name: name || null, image: image || null, emailVerified: emailVerified ? now : null, termsAcceptedAt: now },
+            select: { ...userSelect, isActive: true },
+          });
+          created = true;
+        }
+        await prisma.account.create({ data: { userId: user.id, type: "oidc", provider, providerAccountId } });
+      }
+
+      if (!user.isActive) throw new HttpError(403, "account_disabled", "This account is disabled. Contact support.");
+      await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: now, ...(user.image || !image ? {} : { image }) } });
+      if (created) void onCustomerRegistered(user.id);
+      return issue(user);
     },
   );
 
